@@ -30,3 +30,6 @@ Road data attribution: © OpenStreetMap contributors. Extracts: Geofabrik.
 
 ## Build
 GitHub Actions builds a debug APK on every push. Open **Actions**, choose the newest **Build Android APK** run, and download the `SpeedLimitAlert-debug-apk` artifact.
+
+
+Diagnostic build validation.
