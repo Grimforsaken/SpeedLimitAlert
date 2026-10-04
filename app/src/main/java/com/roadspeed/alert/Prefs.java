@@ -14,6 +14,10 @@ public final class Prefs {
     public static final String KEY_LAST_MODIFIED = "last_modified";
     public static final String KEY_LAST_UPDATE = "last_update";
     public static final String KEY_EXTERNAL_URI = "external_uri";
+    public static final String KEY_FLOATING_WIDGET = "floating_widget";
+    public static final String KEY_WIDGET_X = "widget_x";
+    public static final String KEY_WIDGET_Y = "widget_y";
+
     private Prefs() {}
     public static SharedPreferences get(Context c) { return c.getSharedPreferences(NAME, Context.MODE_PRIVATE); }
 }
