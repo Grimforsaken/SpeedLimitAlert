@@ -36,7 +36,6 @@ public final class RoadDataImporter {
         if(backup.exists())backup.delete();progress.update(100,"Road data ready");return current;
     }
     private void setup(SQLiteDatabase db){
-        db.execSQL("PRAGMA journal_mode=OFF");db.execSQL("PRAGMA synchronous=OFF");
         db.execSQL("CREATE TABLE ways(id INTEGER PRIMARY KEY,name TEXT,road_rank INTEGER,fwd_mph INTEGER,back_mph INTEGER)");
         db.execSQL("CREATE TABLE way_nodes(way_id INTEGER,seq INTEGER,node_id INTEGER,PRIMARY KEY(way_id,seq))");
         db.execSQL("CREATE INDEX idx_way_nodes_way ON way_nodes(way_id)");
