@@ -126,7 +126,7 @@ public class StorageActivity extends Activity {
 
         root.addView(label("SOURCE DOWNLOADS", 18, true));
         root.addView(label(
-                "Retained PBF files can be processed again or deleted after successful processing.",
+                "Retained PBF files can be extracted into the compact offline road database, then deleted.",
                 13,
                 false));
 
@@ -183,7 +183,7 @@ public class StorageActivity extends Activity {
                     false);
             row.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
 
-            Button process = button("PROCESS");
+            Button process = button("EXTRACT");
             process.setOnClickListener(v -> startRetained(f));
             row.addView(process);
 
@@ -231,7 +231,7 @@ public class StorageActivity extends Activity {
 
     private void startRetained(File f) {
         progress.setProgress(0);
-        progressText.setText("Starting processing…");
+        progressText.setText("Starting extraction…");
 
         Intent i = new Intent(this, PbfImportService.class)
                 .putExtra(PbfImportService.EXTRA_MODE, "retained")
