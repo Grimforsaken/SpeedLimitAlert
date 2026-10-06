@@ -32,7 +32,7 @@ public final class Prefs {
     }
 
     public static Set<String> selectedWidgets(Context c) {
-        String raw = get(c).getString(KEY_WIDGETS, "speed,rpm,coolant,voltage");
+        String raw = get(c).getString(KEY_WIDGETS, "speed,speed_limit,rpm,coolant,voltage");
         LinkedHashSet<String> out = new LinkedHashSet<>();
         if (raw != null) {
             for (String s : raw.split(",")) {

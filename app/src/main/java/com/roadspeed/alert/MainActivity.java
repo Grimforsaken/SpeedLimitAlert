@@ -84,8 +84,8 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(15,15,15));
         scroll.addView(root);
 
-        root.addView(label("CAR DASHBOARD", 26, true));
-        root.addView(label("OBD dashboard + offline speed-limit data", 14, false));
+        root.addView(label("CAR SCANNER CUSTOM", 26, true));
+        root.addView(label("OBD-II scanner + offline speed-limit data", 14, false));
 
         obdStatus = label("", 14, false);
         roadStatus = label("", 13, false);
