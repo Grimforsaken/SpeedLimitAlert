@@ -269,7 +269,11 @@ jobs:
                   else if(op is ParameterDefinition pp)di=Instruction.Create(si.OpCode,dm.Parameters[pp.Index]);
                   else if(op is Instruction)di=Instruction.Create(si.OpCode,Instruction.Create(OpCodes.Nop));
                   else if(op is Instruction[])di=Instruction.Create(si.OpCode,new[]{Instruction.Create(OpCodes.Nop)});
-                  else if(op is CallSite cs)di=Instruction.Create(si.OpCode,target.ImportReference(cs));
+                  else if(op is CallSite cs){
+                      var ncs=new CallSite(target.ImportReference(cs.ReturnType)){CallingConvention=cs.CallingConvention,HasThis=cs.HasThis,ExplicitThis=cs.ExplicitThis};
+                      foreach(var p in cs.Parameters)ncs.Parameters.Add(new ParameterDefinition(target.ImportReference(p.ParameterType)));
+                      di=Instruction.Create(si.OpCode,ncs);
+                  }
                   else throw new NotSupportedException("Unsupported operand "+op.GetType());
                   dm.Body.Instructions.Add(di);imap[si]=di;
               }
