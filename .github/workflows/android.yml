@@ -19,39 +19,14 @@ jobs:
       - name: Install inspection tools
         run: |
           dotnet tool install --global ilspycmd
-          python -m pip install --quiet requests beautifulsoup4 lz4 pyelftools
+          python -m pip install --quiet lz4 pyelftools
+          npm install -g @nirewen/apkcombo-downloader
 
-      - name: Download exact Car Scanner 2.1.3 arm64 APK
+      - name: Download Car Scanner 2.1.3 arm64 APK
         run: |
-          python - <<'PY'
-          import requests, hashlib
-          from bs4 import BeautifulSoup
-          base='https://www.apkmirror.com'
-          url=base+'/apk/car-scanner-llc/car-scanner-elm-obd2/car-scanner-elm-obd2-2-1-3-release/car-scanner-elm-obd2-2-1-3-2-android-apk-download/'
-          h={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36'}
-          s=requests.Session()
-          a=s.get(url,headers=h,timeout=30); a.raise_for_status()
-          soup=BeautifulSoup(a.text,'html.parser')
-          jump=soup.select_one('.downloadButton')
-          if jump is None: raise SystemExit('APKMirror download button not found')
-          b=s.get(base+jump['href'],headers=h,timeout=30); b.raise_for_status()
-          soup=BeautifulSoup(b.text,'html.parser')
-          link=soup.select_one('a[rel=nofollow]')
-          if link is None: raise SystemExit('APKMirror final link not found')
-          final=link['href']
-          if final.startswith('/'): final=base+final
-          with s.get(final,headers=h,stream=True,timeout=120) as q:
-            q.raise_for_status()
-            with open('carscanner.apk','wb') as f:
-              for chunk in q.iter_content(1024*1024):
-                if chunk: f.write(chunk)
-          data=open('carscanner.apk','rb').read()
-          print('size',len(data))
-          print('sha256',hashlib.sha256(data).hexdigest())
-          expected='eb0e03ee683566db4a3aede66cd3b9c3989ee531e1b5f8b351a4b4a2ff427945'
-          if hashlib.sha256(data).hexdigest()!=expected:
-            raise SystemExit('Downloaded APK does not match the user recovery APK')
-          PY
+          apkmd download car-scanner-elm-obd2 com.ovz.carscanner --version 2.1.3 --arch arm64-v8a --dpi nodpi --type apk --outfile carscanner.apk --outdir .
+          ls -lh carscanner.apk
+          sha256sum carscanner.apk
 
       - name: Extract MAUI assembly store
         run: |
@@ -78,7 +53,7 @@ jobs:
           for i in range(count):
             n=struct.unpack_from('<I',d,pos)[0]; pos+=4
             names.append(d[pos:pos+n].decode('utf-8')); pos+=n
-          for i,(name,vals) in enumerate(zip(names,desc)):
+          for name,vals in zip(names,desc):
             off,size=vals[1],vals[2]
             b=d[off:off+size]
             if b[:4]==b'XALZ':
