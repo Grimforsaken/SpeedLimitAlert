@@ -1,10 +1,12 @@
 package com.roadspeed.alert;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -40,6 +42,14 @@ public class StorageActivity extends Activity {
         super.onCreate(b);
         buildUi();
         refresh();
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 991);
+        }
+        try {
+            Intent svc = new Intent(this, RoadLimitService.class);
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc); else startService(svc);
+        } catch (Exception ignored) {}
+        UpdateScheduler.schedulePeriodic(this);
     }
 
     @Override
