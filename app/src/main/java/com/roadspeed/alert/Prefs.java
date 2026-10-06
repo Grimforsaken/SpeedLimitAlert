@@ -7,7 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 public final class Prefs {
-    private static final String NAME = "car_dashboard";
+    private static final String NAME = "car_scanner";
 
     public static final String KEY_REGION = "region";
     public static final String KEY_AUTO_UPDATE = "auto_update";
