@@ -3,6 +3,8 @@ name: Build Car Scanner Patch Tools
 on:
   push:
     branches: [ car-scanner-patchtools ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
