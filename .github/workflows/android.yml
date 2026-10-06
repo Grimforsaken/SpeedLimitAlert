@@ -1,4 +1,4 @@
-name: Inspect Real Car Scanner
+name: Build Car Scanner Patcher
 
 on:
   pull_request:
@@ -6,70 +6,174 @@ on:
   workflow_dispatch:
 
 jobs:
-  inspect:
+  tools:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
-      - name: Install tools
+          dotnet-version: '10.0.x'
+      - name: Build self-contained patcher
         run: |
-          dotnet tool install --global ilspycmd
-          python -m pip install --quiet requests lz4 pyelftools
-      - name: Download exact recovered Car Scanner 2.1.3 APK
-        run: |
-          python - <<'PY'
-          import requests,hashlib
-          url='https://d.apkpure.net/b/APK/com.ovz.carscanner?versionCode=42001003'
-          with requests.get(url,headers={'User-Agent':'Mozilla/5.0'},stream=True,allow_redirects=True,timeout=180) as r:
-            r.raise_for_status()
-            with open('carscanner.apk','wb') as f:
-              for ch in r.iter_content(1024*1024):
-                if ch:f.write(ch)
-          b=open('carscanner.apk','rb').read()
-          sha=hashlib.sha256(b).hexdigest()
-          print(len(b),sha)
-          assert len(b)==63465574
-          assert sha=='eb0e03ee683566db4a3aede66cd3b9c3989ee531e1b5f8b351a4b4a2ff427945'
-          PY
-      - name: Extract CarScannerMaui assembly
-        run: |
-          mkdir -p inspect/apk inspect/asm
-          unzip -q carscanner.apk -d inspect/apk
-          cat > inspect/extract.py <<'PY'
-          import struct,sys,os,lz4.block
-          from elftools.elf.elffile import ELFFile
-          so=sys.argv[1];out=sys.argv[2];os.makedirs(out,exist_ok=True)
-          with open(so,'rb') as f:
-            s=ELFFile(f).get_section_by_name('payload');d=s.data()
-          assert d[:4]==b'XABA'
-          n=struct.unpack_from('<I',d,8)[0];isz=struct.unpack_from('<I',d,16)[0];p=20+isz;desc=[]
-          for _ in range(n): desc.append(struct.unpack_from('<7I',d,p));p+=28
-          names=[]
-          for _ in range(n):
-            z=struct.unpack_from('<I',d,p)[0];p+=4;names.append(d[p:p+z].decode());p+=z
-          for i,(name,x) in enumerate(zip(names,desc)):
-            b=d[x[1]:x[1]+x[2]]
-            if b[:4]==b'XALZ': b=lz4.block.decompress(b[12:],uncompressed_size=struct.unpack_from('<I',b,8)[0])
-            path=os.path.join(out,name if name.endswith('.dll') else name+'.dll'); os.makedirs(os.path.dirname(path),exist_ok=True); open(path,'wb').write(b)
-          print('count',n)
-          PY
-          python inspect/extract.py inspect/apk/lib/arm64-v8a/libassemblies.arm64-v8a.blob.so inspect/asm
-      - name: Inspect target types
-        run: |
-          ilspycmd -l c inspect/asm/CarScannerMaui.dll > inspect/types.txt
-          grep -Ei 'GPS.*Altitude|Altitude.*GPS|GPS.*Speed|DashboardItem.*SelectSensor|PID_' inspect/types.txt | head -400 | tee inspect/relevant.txt
-          ilspycmd -t 'CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_GPSAltitude' inspect/asm/CarScannerMaui.dll > inspect/PID_GPSAltitude.cs
-          ilspycmd -t 'CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_GPSSpeed' inspect/asm/CarScannerMaui.dll > inspect/PID_GPSSpeed.cs
-          echo '===== PID_GPSAltitude ====='
-          cat inspect/PID_GPSAltitude.cs
-          echo '===== PID_GPSSpeed ====='
-          cat inspect/PID_GPSSpeed.cs
+          mkdir -p tools/Patcher
+          cd tools/Patcher
+          dotnet new console -f net10.0 --force
+          dotnet add package Mono.Cecil --version 0.11.6
+          cat > Program.cs <<'CS'
+          using System;
+          using System.Collections.Generic;
+          using System.IO;
+          using System.Linq;
+          using Mono.Cecil;
+          using Mono.Cecil.Cil;
 
-      - name: Upload inspection
+          if (args.Length < 3) {
+              Console.Error.WriteLine("usage: CarScannerPatcher <CarScannerMaui.dll> <SpeedLimitPatch.dll> <output.dll>");
+              return 2;
+          }
+          string targetPath=Path.GetFullPath(args[0]), helperPath=Path.GetFullPath(args[1]), outputPath=Path.GetFullPath(args[2]);
+          var resolver = new DefaultAssemblyResolver();
+          resolver.AddSearchDirectory(Path.GetDirectoryName(targetPath)!);
+          resolver.AddSearchDirectory(Path.GetDirectoryName(helperPath)!);
+          var rp = new ReaderParameters { AssemblyResolver = resolver, ReadSymbols = false, InMemory = true };
+          using var target = ModuleDefinition.ReadModule(targetPath, rp);
+          using var helper = ModuleDefinition.ReadModule(helperPath, rp);
+
+          const string fullName="CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_SpeedLimit";
+          if (target.Types.Any(t=>t.FullName==fullName)) {
+              Console.Error.WriteLine("Target already contains PID_SpeedLimit");
+              return 3;
+          }
+          var src=helper.Types.First(t=>t.FullName==fullName);
+          var dst=new TypeDefinition(src.Namespace, src.Name, src.Attributes, target.ImportReference(src.BaseType));
+          target.Types.Add(dst);
+
+          var fmap=new Dictionary<FieldDefinition,FieldDefinition>();
+          foreach(var sf in src.Fields) {
+              var df=new FieldDefinition(sf.Name,sf.Attributes,target.ImportReference(sf.FieldType));
+              if(sf.HasConstant){df.Constant=sf.Constant;}
+              dst.Fields.Add(df); fmap[sf]=df;
+          }
+
+          var mmap=new Dictionary<MethodDefinition,MethodDefinition>();
+          foreach(var sm in src.Methods) {
+              var dm=new MethodDefinition(sm.Name,sm.Attributes,target.ImportReference(sm.ReturnType));
+              dm.ImplAttributes=sm.ImplAttributes;
+              foreach(var sp in sm.Parameters) dm.Parameters.Add(new ParameterDefinition(sp.Name,sp.Attributes,target.ImportReference(sp.ParameterType)));
+              dst.Methods.Add(dm); mmap[sm]=dm;
+          }
+
+          MethodReference ImportMethod(MethodReference mr) {
+              if(mr.DeclaringType.FullName==src.FullName) {
+                  var resolved=mr.Resolve();
+                  if(resolved!=null && mmap.TryGetValue(resolved,out var mapped)) return mapped;
+                  var candidates=src.Methods.Where(x=>x.Name==mr.Name && x.Parameters.Count==mr.Parameters.Count).ToList();
+                  if(candidates.Count==1) return mmap[candidates[0]];
+              }
+              return target.ImportReference(mr);
+          }
+          FieldReference ImportField(FieldReference fr) {
+              if(fr.DeclaringType.FullName==src.FullName) {
+                  var resolved=fr.Resolve();
+                  if(resolved!=null && fmap.TryGetValue(resolved,out var mapped)) return mapped;
+                  var candidate=src.Fields.FirstOrDefault(x=>x.Name==fr.Name);
+                  if(candidate!=null) return fmap[candidate];
+              }
+              return target.ImportReference(fr);
+          }
+          TypeReference ImportType(TypeReference tr) {
+              if(tr.FullName==src.FullName) return dst;
+              return target.ImportReference(tr);
+          }
+
+          foreach(var sm in src.Methods) {
+              var dm=mmap[sm];
+              if(!sm.HasBody) continue;
+              dm.Body.InitLocals=sm.Body.InitLocals;
+              dm.Body.MaxStackSize=Math.Max(sm.Body.MaxStackSize,8);
+              var vmap=new Dictionary<VariableDefinition,VariableDefinition>();
+              foreach(var sv in sm.Body.Variables) {
+                  var dv=new VariableDefinition(ImportType(sv.VariableType)); dm.Body.Variables.Add(dv); vmap[sv]=dv;
+              }
+              var imap=new Dictionary<Instruction,Instruction>();
+              foreach(var si in sm.Body.Instructions) {
+                  Instruction di;
+                  object? op=si.Operand;
+                  if(op==null) di=Instruction.Create(si.OpCode);
+                  else if(op is string ss) di=Instruction.Create(si.OpCode,ss);
+                  else if(op is sbyte sb) di=Instruction.Create(si.OpCode,sb);
+                  else if(op is byte bb) di=Instruction.Create(si.OpCode,(sbyte)bb);
+                  else if(op is int ii) di=Instruction.Create(si.OpCode,ii);
+                  else if(op is long ll) di=Instruction.Create(si.OpCode,ll);
+                  else if(op is float ff) di=Instruction.Create(si.OpCode,ff);
+                  else if(op is double dd) di=Instruction.Create(si.OpCode,dd);
+                  else if(op is MethodReference mr) di=Instruction.Create(si.OpCode,ImportMethod(mr));
+                  else if(op is FieldReference fr) di=Instruction.Create(si.OpCode,ImportField(fr));
+                  else if(op is TypeReference tr) di=Instruction.Create(si.OpCode,ImportType(tr));
+                  else if(op is VariableDefinition vv) di=Instruction.Create(si.OpCode,vmap[vv]);
+                  else if(op is ParameterDefinition pp) di=Instruction.Create(si.OpCode,dm.Parameters[pp.Index]);
+                  else if(op is Instruction) di=Instruction.Create(si.OpCode,Instruction.Create(OpCodes.Nop));
+                  else if(op is Instruction[]) di=Instruction.Create(si.OpCode,new[]{Instruction.Create(OpCodes.Nop)});
+                  else if(op is CallSite cs) di=Instruction.Create(si.OpCode,target.ImportReference(cs));
+                  else throw new NotSupportedException($"operand {op.GetType()} in {sm.FullName}");
+                  dm.Body.Instructions.Add(di); imap[si]=di;
+              }
+              for(int i=0;i<sm.Body.Instructions.Count;i++) {
+                  var so=sm.Body.Instructions[i].Operand; var di=dm.Body.Instructions[i];
+                  if(so is Instruction one) di.Operand=imap[one];
+                  else if(so is Instruction[] many) di.Operand=many.Select(x=>imap[x]).ToArray();
+              }
+              foreach(var seh in sm.Body.ExceptionHandlers) {
+                  dm.Body.ExceptionHandlers.Add(new ExceptionHandler(seh.HandlerType) {
+                      CatchType=seh.CatchType==null?null:ImportType(seh.CatchType),
+                      TryStart=seh.TryStart==null?null:imap[seh.TryStart],
+                      TryEnd=seh.TryEnd==null?null:imap[seh.TryEnd],
+                      HandlerStart=seh.HandlerStart==null?null:imap[seh.HandlerStart],
+                      HandlerEnd=seh.HandlerEnd==null?null:imap[seh.HandlerEnd],
+                      FilterStart=seh.FilterStart==null?null:imap[seh.FilterStart]
+                  });
+              }
+          }
+
+          var carData=target.Types.First(t=>t.FullName=="CarScannerMaui.OBD2.CarData");
+          var create=carData.Methods.First(m=>m.Name=="CreateCalculatedPIDs" && !m.HasParameters);
+          var ins=create.Body.Instructions;
+          int gpsNew=-1;
+          for(int i=0;i<ins.Count;i++) if(ins[i].OpCode==OpCodes.Newobj && ins[i].Operand is MethodReference mr && mr.DeclaringType.FullName=="CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_GPSSpeed") { gpsNew=i; break; }
+          if(gpsNew<0) throw new Exception("GPS speed constructor not found");
+          int addAt=-1;
+          MethodReference? getList=null, addPid=null, setId=null;
+          for(int i=gpsNew;i<Math.Min(ins.Count,gpsNew+20);i++) {
+              if(ins[i].Operand is MethodReference mr) {
+                  if(mr.Name=="get_LiveDataPIDs") getList=mr;
+                  else if(mr.Name=="set_Id") setId=mr;
+                  else if(mr.Name=="Add" && mr.DeclaringType.FullName.StartsWith("System.Collections.Generic.List")) { addPid=mr; addAt=i; break; }
+              }
+          }
+          if(addAt<0 || getList==null || addPid==null || setId==null) throw new Exception("Insertion refs not found");
+          var ctor=mmap[src.Methods.First(m=>m.IsConstructor && !m.IsStatic && m.Parameters.Count==0)];
+          var injected=new[]{
+              Instruction.Create(OpCodes.Ldarg_0),
+              Instruction.Create(OpCodes.Call,getList),
+              Instruction.Create(OpCodes.Newobj,ctor),
+              Instruction.Create(OpCodes.Dup),
+              Instruction.Create(OpCodes.Ldc_I4,917),
+              Instruction.Create(OpCodes.Callvirt,setId),
+              Instruction.Create(OpCodes.Callvirt,addPid)
+          };
+          for(int k=0;k<injected.Length;k++) ins.Insert(addAt+1+k,injected[k]);
+          create.Body.MaxStackSize=Math.Max(create.Body.MaxStackSize,5);
+
+          Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+          target.Write(outputPath,new WriterParameters{WriteSymbols=false});
+          Console.WriteLine($"Patched: {outputPath}");
+          Console.WriteLine($"Added {fullName}; injected Id 917 after GPS speed.");
+          return 0;
+          CS
+          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/patcher
+      - name: Upload patcher
         uses: actions/upload-artifact@v4
         with:
-          name: real-car-scanner-types
-          path: inspect/*.txt
+          name: carscanner-patcher
+          path: out/patcher
+          compression-level: 0
