@@ -1,4 +1,4 @@
-name: Build MAUI Tools
+name: Build Local Patch Toolchain
 
 on:
   pull_request:
@@ -13,68 +13,79 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Build self-contained decompiler
+
+      - name: Build Roslyn compiler wrapper
         run: |
-          mkdir -p tools/DecompilerTool
-          cd tools/DecompilerTool
+          mkdir -p tools/CompileTool
+          cd tools/CompileTool
           dotnet new console -f net10.0 --force
-          dotnet add package ICSharpCode.Decompiler --version 11.1.0.9782
+          dotnet add package Microsoft.CodeAnalysis.CSharp --version 4.14.0
           cat > Program.cs <<'CS'
           using System;
+          using System.Collections.Generic;
           using System.IO;
-          using ICSharpCode.Decompiler;
-          using ICSharpCode.Decompiler.CSharp;
-          using ICSharpCode.Decompiler.TypeSystem;
+          using System.Linq;
+          using Microsoft.CodeAnalysis;
+          using Microsoft.CodeAnalysis.CSharp;
 
-          if (args.Length < 2) {
-              Console.Error.WriteLine("usage: DecompilerTool <assembly> <output.cs> [full.type.name]");
+          if (args.Length < 4) {
+              Console.Error.WriteLine("usage: CompileTool <source.cs> <out.dll> <assemblyName> <refsDir> [extraRef.dll ...]");
               return 2;
           }
-          var input = Path.GetFullPath(args[0]);
+          var source = Path.GetFullPath(args[0]);
           var output = Path.GetFullPath(args[1]);
-          var settings = new DecompilerSettings { ThrowOnAssemblyResolveErrors = false };
-          var d = new CSharpDecompiler(input, settings);
-          string text = args.Length >= 3
-              ? d.DecompileTypeAsString(new FullTypeName(args[2]))
-              : d.DecompileWholeModuleAsString();
-          File.WriteAllText(output, text);
+          var asmName = args[2];
+          var refsDir = Path.GetFullPath(args[3]);
+          var refs = new List<MetadataReference>();
+          foreach (var f in Directory.EnumerateFiles(refsDir, "*.dll", SearchOption.AllDirectories)) {
+              try { refs.Add(MetadataReference.CreateFromFile(f)); } catch {}
+          }
+          for (int i=4;i<args.Length;i++) {
+              var f=Path.GetFullPath(args[i]);
+              if (File.Exists(f)) refs.Add(MetadataReference.CreateFromFile(f));
+          }
+          var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(source),
+              new CSharpParseOptions(LanguageVersion.Latest));
+          var comp = CSharpCompilation.Create(
+              asmName,
+              new[]{syntax},
+              refs,
+              new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
+                  optimizationLevel: OptimizationLevel.Release,
+                  nullableContextOptions: NullableContextOptions.Disable,
+                  allowUnsafe: true));
+          using var fs = File.Create(output);
+          var emit = comp.Emit(fs);
+          foreach(var d in emit.Diagnostics.Where(d=>d.Severity>=DiagnosticSeverity.Warning))
+              Console.Error.WriteLine(d.ToString());
+          if(!emit.Success) { try{fs.Close();File.Delete(output);}catch{} return 1; }
           Console.WriteLine(output);
           return 0;
           CS
-          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/decompiler
+          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/compile
 
-      - name: Build self-contained dnlib inspector
+      - name: Build Cecil patcher skeleton
         run: |
-          mkdir -p tools/DnInspect
-          cd tools/DnInspect
+          mkdir -p tools/CecilPatch
+          cd tools/CecilPatch
           dotnet new console -f net10.0 --force
-          dotnet add package dnlib --version 4.5.0
+          dotnet add package Mono.Cecil --version 0.11.6
           cat > Program.cs <<'CS'
           using System;
-          using System.Linq;
-          using dnlib.DotNet;
-          using dnlib.DotNet.Emit;
-
+          using Mono.Cecil;
           if (args.Length < 1) return 2;
-          var filter = args.Length > 1 ? args[1] : "";
-          var m = ModuleDefMD.Load(args[0]);
-          foreach (var t in m.GetTypes()) {
-            if (!string.IsNullOrEmpty(filter) && !t.FullName.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
-            Console.WriteLine("TYPE " + t.FullName);
-            foreach (var md in t.Methods) {
-              Console.WriteLine("METHOD " + md.FullName);
-              if (md.HasBody) foreach (var ins in md.Body.Instructions)
-                Console.WriteLine($"  {ins.Offset:X4}: {ins.OpCode} {ins.Operand}");
-            }
-            foreach (var f in t.Fields) Console.WriteLine("FIELD " + f.FullName);
-          }
+          using var m = ModuleDefinition.ReadModule(args[0]);
+          Console.WriteLine(m.Assembly.Name.FullName);
+          foreach (var t in m.Types)
+            if (t.FullName.Contains("CarData") || t.FullName.Contains("PID_GPSSpeed"))
+              Console.WriteLine(t.FullName);
           return 0;
           CS
-          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/dninspect
+          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/cecil
 
-      - name: Upload tools
+      - name: Upload toolchain
         uses: actions/upload-artifact@v4
         with:
-          name: maui-patch-tools-v2
+          name: carscanner-local-toolchain
           path: out
           compression-level: 0
