@@ -1,0 +1,38 @@
+name: Build Car Scanner Patch Tools
+
+on:
+  push:
+    branches: [ car-scanner-patchtools ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Install Android signing tools
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0"
+          mkdir -p out/androidtools/lib
+          cp "$ANDROID_HOME/build-tools/35.0.0/zipalign" out/androidtools/
+          LIBCPP=$(find "$ANDROID_HOME" -name "libc++.so" -type f | head -1)
+          test -n "$LIBCPP"
+          cp "$LIBCPP" out/androidtools/
+          cp "$ANDROID_HOME/build-tools/35.0.0/apksigner" out/androidtools/
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" out/androidtools/lib/
+      - name: Build offline helper
+        run: dotnet build tools/OfflineHelper/OfflineHelper.csproj -c Release -o out/helper
+      - name: Publish inspection tool
+        run: dotnet publish tools/AssemblyTool/AssemblyTool.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -o out/assemblytool
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assemblytool-linux-x64
+          path: |
+            out/assemblytool/AssemblyTool
+            out/helper/OfflineHelper.dll
+            out/androidtools
