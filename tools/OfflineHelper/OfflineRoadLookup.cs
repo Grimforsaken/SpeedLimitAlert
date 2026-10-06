@@ -12,7 +12,7 @@ public static class OfflineRoadLookup
     private static int RecordBase;
     private static bool Loaded;
 
-    public static double GetLimit(double latitude, double longitude)
+    public static double GetLimitKph(double latitude, double longitude)
     {
         try
         {
@@ -68,7 +68,7 @@ public static class OfflineRoadLookup
                 }
             }
 
-            return bestLimit;
+            return bestLimit > 0 ? bestLimit * 1.609344 : -1;
         }
         catch
         {
