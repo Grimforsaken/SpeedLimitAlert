@@ -159,7 +159,12 @@ internal static partial class PbfExtractor
         {
             case 0: ReadVar(b, ref p); break;
             case 1: p += 8; break;
-            case 2: p += checked((int)ReadVar(b, ref p)); break;
+            case 2:
+            {
+                int length = checked((int)ReadVar(b, ref p));
+                p += length;
+                break;
+            }
             case 5: p += 4; break;
             default: throw new InvalidDataException("Unsupported protobuf wire type " + wireType);
         }
