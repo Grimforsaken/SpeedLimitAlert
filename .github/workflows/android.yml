@@ -1,4 +1,4 @@
-name: Tool Bootstrap
+name: Build MAUI Tools
 
 on:
   pull_request:
@@ -10,16 +10,67 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download self-contained ILSpy for Linux
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build self-contained decompiler
         run: |
-          curl -fL --retry 4 --retry-delay 2 \
-            -o ILSpy_linux-x64.zip \
-            https://github.com/icsharpcode/ILSpy/releases/download/v11.1/ILSpy_linux-x64_11.1.0.9782.zip
-          unzip -q ILSpy_linux-x64.zip -d ilspy
-          find ilspy -maxdepth 2 -type f | head -40
-      - name: Upload ILSpy
+          mkdir -p tools/DecompilerTool
+          cd tools/DecompilerTool
+          dotnet new console -f net10.0 --force
+          dotnet add package ICSharpCode.Decompiler --version 11.1.0.9782
+          cat > Program.cs <<'CS'
+          using System;
+          using System.IO;
+          using ICSharpCode.Decompiler;
+          using ICSharpCode.Decompiler.CSharp;
+
+          if (args.Length < 1) {
+              Console.Error.WriteLine("usage: decompile <assembly> [output.cs]");
+              return 2;
+          }
+          var input = Path.GetFullPath(args[0]);
+          var output = args.Length > 1 ? Path.GetFullPath(args[1]) : input + ".decompiled.cs";
+          var settings = new DecompilerSettings {
+              ThrowOnAssemblyResolveErrors = false
+          };
+          var d = new CSharpDecompiler(input, settings);
+          File.WriteAllText(output, d.DecompileWholeModuleAsString());
+          Console.WriteLine(output);
+          return 0;
+          CS
+          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/decompiler
+      - name: Build self-contained dnlib inspector
+        run: |
+          mkdir -p tools/DnInspect
+          cd tools/DnInspect
+          dotnet new console -f net10.0 --force
+          dotnet add package dnlib --version 4.5.0
+          cat > Program.cs <<'CS'
+          using System;
+          using System.Linq;
+          using dnlib.DotNet;
+          using dnlib.DotNet.Emit;
+          if (args.Length < 1) return 2;
+          var m = ModuleDefMD.Load(args[0]);
+          foreach (var t in m.GetTypes()) {
+            if (t.FullName.Contains("GPS", StringComparison.OrdinalIgnoreCase) ||
+                t.FullName.Contains("Dashboard", StringComparison.OrdinalIgnoreCase) ||
+                t.FullName.Contains("PID", StringComparison.OrdinalIgnoreCase) ||
+                t.FullName.Contains("Sensor", StringComparison.OrdinalIgnoreCase)) {
+              Console.WriteLine("TYPE " + t.FullName);
+              foreach (var md in t.Methods)
+                Console.WriteLine("  M " + md.FullName);
+              foreach (var f in t.Fields)
+                Console.WriteLine("  F " + f.FullName);
+            }
+          }
+          return 0;
+          CS
+          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/dninspect
+      - name: Upload tools
         uses: actions/upload-artifact@v4
         with:
-          name: ilspy-linux-x64
-          path: ilspy
+          name: maui-patch-tools
+          path: out
           compression-level: 0
