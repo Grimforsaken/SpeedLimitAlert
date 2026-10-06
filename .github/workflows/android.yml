@@ -1,4 +1,4 @@
-name: Build Car Scanner Patch Helper
+name: Tool Bootstrap
 
 on:
   pull_request:
@@ -6,24 +6,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  tools:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Install Android SDK 35
+      - name: Download self-contained ILSpy for Linux
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
-      - uses: gradle/actions/setup-gradle@v4
+          curl -fL --retry 4 --retry-delay 2 \
+            -o ILSpy_linux-x64.zip \
+            https://github.com/icsharpcode/ILSpy/releases/download/v11.1/ILSpy_linux-x64_11.1.0.9782.zip
+          unzip -q ILSpy_linux-x64.zip -d ilspy
+          find ilspy -maxdepth 2 -type f | head -40
+      - name: Upload ILSpy
+        uses: actions/upload-artifact@v4
         with:
-          gradle-version: '8.10.2'
-      - name: Build road-speed helper APK
-        run: gradle :patchhelper:assembleDebug --stacktrace
-      - uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: CarScanner-RoadSpeed-PatchHelper
-          path: patchhelper/build/outputs/apk/debug/patchhelper-debug.apk
+          name: ilspy-linux-x64
+          path: ilspy
+          compression-level: 0
