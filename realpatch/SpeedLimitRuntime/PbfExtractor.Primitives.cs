@@ -106,7 +106,12 @@ internal static partial class PbfExtractor
             if (field == 2 && wt == 2) ReadPackedUInt(b, ref p, keys);
             else if (field == 3 && wt == 2) ReadPackedUInt(b, ref p, vals);
             else if (field == 8 && wt == 2) ReadPackedSInt64Delta(b, ref p, refs);
-            else Skip(b, ref p, wt);
+            else
+            {
+                if (wt != 0 && wt != 1 && wt != 2 && wt != 5)
+                    throw new InvalidDataException($"Bad Way protobuf key: field={field} wire={wt} p={p} start={offset} end={end}");
+                Skip(b, ref p, wt);
+            }
         }
 
         if (refs.Count < 2) return;
