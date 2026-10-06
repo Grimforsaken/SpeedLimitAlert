@@ -151,7 +151,7 @@ internal sealed class RoadIndex
 
                     if (limit <= 0) continue;
 
-                    double score = dist + headingPenalty - Math.Min(6, s.Rank);
+                    double score = dist + headingPenalty - Math.Min(6, (int)s.Rank);
                     if (score < bestScore)
                     {
                         bestScore = score;
