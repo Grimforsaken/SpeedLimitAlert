@@ -127,7 +127,7 @@ public class PbfImportService extends Service {
 
         return new Notification.Builder(this, "road_data")
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle("Speed Limit Alert")
+                .setContentTitle("Car Dashboard")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
