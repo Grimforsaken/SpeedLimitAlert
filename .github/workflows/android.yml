@@ -342,14 +342,29 @@ jobs:
       - name: Build Android offline-road helper
         run: |
           gradle :patchhelper:assembleDebug --stacktrace
-          unzip -p patchhelper/build/outputs/apk/debug/patchhelper-debug.apk classes.dex > work/classes4.dex
-          test -s work/classes4.dex
-          ls -lh work/classes4.dex
+          rm -rf work/helperdex
+          mkdir -p work/helperdex
+          cd work/helperdex
+          unzip -j ../../patchhelper/build/outputs/apk/debug/patchhelper-debug.apk 'classes*.dex'
+          cd ../..
+          ls -lh work/helperdex/classes*.dex
+          n=4
+          for d in $(find work/helperdex -maxdepth 1 -name 'classes*.dex' | sort -V); do
+            cp "$d" "work/classes$n.dex"
+            n=$((n+1))
+          done
+          test -n "$(for d in work/classes{4,5,6,7,8,9}.dex; do [ -f "$d" ] && strings "$d" | grep -m1 'Lcom/ovz/carscanner/RoadSpeedRuntime;' || true; done)"
+          echo "Helper runtime classes:"
+          for d in work/classes{4,5,6,7,8,9}.dex; do
+            [ -f "$d" ] || continue
+            echo "--- $d ---"
+            strings "$d" | grep -E 'Lcom/ovz/carscanner/(RoadSpeedRuntime|RoadDatabase|RoadDataImporter|SpeedLimitOfflineRoadDataSettingsActivityPatch|roadspeedinitprovider);' || true
+          done
 
       - name: Merge patch into real Car Scanner APK
         run: |
           java -jar apktool.jar d -f -s carscanner.apk -o work/decoded
-          cp work/classes4.dex work/decoded/classes4.dex
+          for d in work/classes{4,5,6,7,8,9}.dex; do [ -f "$d" ] && cp "$d" work/decoded/; done
           cp work/libassemblies.patched.so work/decoded/lib/arm64-v8a/libassemblies.arm64-v8a.blob.so
           rm -f work/decoded/lib/arm64-v8a/libaot-CarScannerMaui.dll.so
           python - <<'PY'
@@ -388,7 +403,12 @@ jobs:
           "$BT/apksigner" sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out work/CarScanner-SpeedLimit-2.1.3.apk work/CarScanner-SpeedLimit-aligned.apk
           "$BT/apksigner" verify --verbose --print-certs work/CarScanner-SpeedLimit-2.1.3.apk
           unzip -t work/CarScanner-SpeedLimit-2.1.3.apk >/dev/null
-          unzip -l work/CarScanner-SpeedLimit-2.1.3.apk | grep -E 'classes4.dex|libassemblies.arm64-v8a.blob.so'
+          unzip -l work/CarScanner-SpeedLimit-2.1.3.apk | grep -E 'classes[4-9]\\.dex|libassemblies.arm64-v8a.blob.so'
+          rm -rf work/finaldex && mkdir work/finaldex
+          cd work/finaldex
+          unzip -j ../CarScanner-SpeedLimit-2.1.3.apk 'classes*.dex' >/dev/null
+          cd ../..
+          test -n "$(for d in work/finaldex/classes*.dex; do strings "$d" | grep -m1 'Lcom/ovz/carscanner/RoadSpeedRuntime;' || true; done)"
           "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest application-id work/CarScanner-SpeedLimit-2.1.3.apk
           "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest version-code work/CarScanner-SpeedLimit-2.1.3.apk
           "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest print work/CarScanner-SpeedLimit-2.1.3.apk | grep -E 'SpeedLimitOfflineRoadDataSettingsActivityPatch|roadspeedinitprovider'
