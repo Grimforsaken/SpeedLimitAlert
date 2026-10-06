@@ -2,6 +2,7 @@ name: Fetch APK patch tools
 on:
   push:
     branches: [ original-car-scanner-addon ]
+  pull_request:
   workflow_dispatch:
 jobs:
   tools:
