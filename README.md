@@ -1,32 +1,33 @@
-# Speed Limit Alert
+# Car Dashboard rebuild
 
-Standalone Android speed warning app for a tablet connected to a Classic Bluetooth ELM327-style OBD-II adapter.
+Clean-room Android rebuild focused on the user's vehicle-dashboard workflow.
 
-It reads vehicle speed from OBD-II PID `01 0D`, uses GPS only to identify the road/direction, looks up the posted static speed limit from a processed offline OpenStreetMap database, and gives a spoken warning when the vehicle is more than 5 mph over the matched limit. The warning offset is adjustable.
+## Vehicle connection
 
-## Offline road data and storage
-The app downloads a current U.S. state `.osm.pbf` from Geofabrik over Wi-Fi and processes it on the tablet. It keeps only road geometry for ways with explicit numeric speed-limit tags. Buildings, businesses, addresses, waterways, land use, POIs and unrelated map data are not retained.
+The app supports both Bluetooth Classic ELM327-style adapters and BLE ELM327-style adapters. The **Select / Scan OBD** screen scans both transports instead of requiring the adapter to already be paired. Standard live widgets include vehicle speed, RPM, coolant temperature, voltage, engine load, throttle, fuel level, intake temperature, MAP, MAF, timing advance, and engine runtime.
 
-Processing is three-pass: select speed-limited ways and their needed node IDs; extract coordinates only for those nodes; build a compact indexed road-segment database. The old working database stays active until the new one validates.
+## Custom widgets
 
-**Road Data & Storage** lists every retained PBF with an individual Delete button and a Delete All button. **Delete large PBF after successful processing** is on by default so automatic updates do not clutter the tablet. Manually imported external PBF files are remembered separately so Android can delete the original when requested.
+Open **Customize Widgets** to choose dashboard tiles. **Speed Limit** is a normal custom widget, not a floating overlay. It is supplied by the offline road matcher instead of OBD-II.
 
-Automatic updates use Android JobScheduler with an unmetered-network constraint and verify that the active network is Wi-Fi. The default Geofabrik region is `oklahoma`; change the slug in the storage screen for another U.S. state, such as `kansas`, `texas`, or `new-mexico`.
+## Offline speed-limit data
 
-## First use
-1. Pair the ELM327-compatible OBD adapter in Android Bluetooth settings.
-2. Open the app and grant Location, Bluetooth and Notification permissions.
-3. Open **Road Data & Storage**, choose the state/region slug, and tap **Check / Download Update on Wi-Fi**.
-4. Wait for processing to finish.
-5. Return to the main screen, choose the paired OBD adapter, and tap **Start Monitoring**.
+The offline road-data system is retained from Speed Limit Alert:
 
-GPS-speed fallback is optional. Road matching and limit lookup remain offline while driving.
+- import a state `.osm.pbf` file manually or download a current Geofabrik U.S. state extract on Wi-Fi
+- extract only speed-limited drivable road geometry needed by the app
+- build a compact SQLite road database
+- use GPS position/bearing to match the current road and direction
+- support `maxspeed`, `maxspeed:forward`, `maxspeed:backward`, and one-way direction
+- show unknown rather than guessing when no trustworthy speed limit exists
+- automatically update on Wi-Fi when enabled
+- automatically delete the large source PBF after successful extraction when enabled
+- retained PBF files have an **EXTRACT** button and separate delete controls
 
-Only explicit numeric static OSM limits are used. Conditional/variable limits are skipped instead of guessed. OSM coverage is incomplete on some roads; if no reliable limit is available the app shows `--` and does not warn. Posted signs and applicable law remain authoritative.
+## Speed warning
 
-Bluetooth support targets Classic Bluetooth SPP / ELM327-style adapters. BLE-only adapters need a device-specific BLE driver.
+The optional audio warning uses OBD vehicle speed first and GPS speed only when the user enables fallback. The default trigger is more than 5 mph over the matched posted speed limit, with hysteresis before re-arming.
 
-Road data attribution: © OpenStreetMap contributors. Extracts: Geofabrik.
+## Recovery reference
 
-## Build
-GitHub Actions builds a debug APK on every push. Open **Actions**, choose the newest **Build Android APK** run, and download the `SpeedLimitAlert-debug-apk` artifact.
+The uploaded Car Scanner recovery was used only as a behavioral/platform reference. It showed that the working app supported both Bluetooth/BLE-related permissions and used a BLE stack. This project does not contain or redistribute the recovered proprietary program code or assets.
