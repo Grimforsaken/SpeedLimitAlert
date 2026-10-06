@@ -8,9 +8,29 @@ static class Program
 
     public static int Main(string[] args)
     {
+        if (args.Length == 4 && args[0] == "--test-pbf")
+        {
+            var runtime = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(args[1]));
+            var type = runtime.GetType("CarScannerSpeedLimitInjected.PbfExtractor", true)!;
+            var method = type.GetMethod(
+                "Extract",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("PBF extractor not found.");
+            method.Invoke(null, new object?[] {
+                Path.GetFullPath(args[2]),
+                Path.GetFullPath(args[3]),
+                null
+            });
+            Console.WriteLine("PBF extraction test completed: " + args[3]);
+            return 0;
+        }
+
         if (args.Length != 4)
         {
             Console.Error.WriteLine("Usage: PatchTool <CarScannerMaui.dll> <BridgeTemplate.dll> <SpeedLimitRuntime.dll> <output.dll>");
+            Console.Error.WriteLine("   or: PatchTool --test-pbf <SpeedLimitRuntime.dll> <input.osm.pbf> <output.sldb>");
             return 2;
         }
 
