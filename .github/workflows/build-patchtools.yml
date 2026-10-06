@@ -15,6 +15,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
+      - name: Install Android signing tools
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0"
+          mkdir -p out/androidtools/lib
+          cp "$ANDROID_HOME/build-tools/35.0.0/zipalign" out/androidtools/
+          cp "$ANDROID_HOME/build-tools/35.0.0/apksigner" out/androidtools/
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" out/androidtools/lib/
       - name: Build offline helper
         run: dotnet build tools/OfflineHelper/OfflineHelper.csproj -c Release -o out/helper
       - name: Publish inspection tool
@@ -25,3 +32,4 @@ jobs:
           path: |
             out/assemblytool/AssemblyTool
             out/helper/OfflineHelper.dll
+            out/androidtools
