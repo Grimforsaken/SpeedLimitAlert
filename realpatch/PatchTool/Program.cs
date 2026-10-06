@@ -392,14 +392,14 @@ static class Program
 
         if (operand is FieldReference fr)
         {
-            var resolved = SafeResolve(fr);
+            var resolved = SafeResolveField(fr);
             if (resolved != null && fieldMap.TryGetValue(resolved, out var mapped)) return mapped;
             return targetModule.ImportReference(fr);
         }
 
         if (operand is MethodReference mr)
         {
-            var resolved = SafeResolve(mr);
+            var resolved = SafeResolveMethod(mr);
             if (resolved != null && methodMap.TryGetValue(resolved, out var mapped)) return mapped;
 
             if (mr is GenericInstanceMethod gim)
@@ -459,20 +459,16 @@ static class Program
         return target.ImportReference(tr);
     }
 
-    private static T? SafeResolve<T>(T reference) where T : MemberReference
+    private static FieldDefinition? SafeResolveField(FieldReference reference)
     {
-        try
-        {
-            return reference switch {
-                MethodReference m => (T?)(MemberReference?)m.Resolve(),
-                FieldReference f => (T?)(MemberReference?)f.Resolve(),
-                _ => null
-            };
-        }
-        catch
-        {
-            return null;
-        }
+        try { return reference.Resolve(); }
+        catch { return null; }
+    }
+
+    private static MethodDefinition? SafeResolveMethod(MethodReference reference)
+    {
+        try { return reference.Resolve(); }
+        catch { return null; }
     }
 
     private static TypeDefinition? FindType(ModuleDefinition module, string fullName)
