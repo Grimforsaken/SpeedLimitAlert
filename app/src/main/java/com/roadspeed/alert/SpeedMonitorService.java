@@ -20,7 +20,7 @@ import java.util.Locale;
 public class SpeedMonitorService extends Service
         implements LocationListener, ObdClient.Listener {
 
-    public static final String ACTION_DATA = "com.roadspeed.alert.DATA";
+    public static final String ACTION_DATA = "com.grimforsaken.carscanner.DATA";
     private static final int NOTIFY = 7001;
     private static final String CHANNEL = "monitor";
 
@@ -191,7 +191,7 @@ public class SpeedMonitorService extends Service
                 : new Notification.Builder(this);
 
         return b.setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("Car Dashboard")
+                .setContentTitle("Car Scanner")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOngoing(true)
