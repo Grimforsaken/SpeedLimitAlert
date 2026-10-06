@@ -26,6 +26,7 @@ public final class RoadSpeedRuntime implements LocationListener {
     private RoadSpeedRuntime(Context c){
         this.c=c.getApplicationContext();db=new RoadDatabase(this.c);lm=(LocationManager)this.c.getSystemService(Context.LOCATION_SERVICE);
         tts=new TextToSpeech(this.c,s->{if(s==TextToSpeech.SUCCESS)tts.setLanguage(Locale.US);});
+        ensureValueFile();
     }
     public static synchronized void start(Context c){
         if(instance==null)instance=new RoadSpeedRuntime(c);
@@ -34,6 +35,10 @@ public final class RoadSpeedRuntime implements LocationListener {
         instance.postSetupNotification();
     }
     public static synchronized RoadSpeedRuntime get(Context c){start(c);return instance;}
+    private void ensureValueFile(){
+        File f=new File(c.getFilesDir(),"GPS_ALTITUDE");
+        if(!f.exists())writeValue("NaN");
+    }
     private void ensureLocation(){
         if(c.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){
             main.postDelayed(this::ensureLocation,15000);return;
@@ -78,7 +83,6 @@ public final class RoadSpeedRuntime implements LocationListener {
         },"CarScanner-RoadData").start();
     }
     private void postSetupNotification(){
-        if(RoadDatabase.currentFile(c).exists())return;
         try{
             NotificationManager nm=(NotificationManager)c.getSystemService(Context.NOTIFICATION_SERVICE);
             String ch="carscanner_speed_limit";
@@ -86,7 +90,8 @@ public final class RoadSpeedRuntime implements LocationListener {
             Intent i=new Intent(c,SpeedLimitOfflineRoadDataSettingsActivityPatch.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             PendingIntent pi=PendingIntent.getActivity(c,7211,i,PendingIntent.FLAG_UPDATE_CURRENT|(Build.VERSION.SDK_INT>=23?PendingIntent.FLAG_IMMUTABLE:0));
             Notification.Builder b=Build.VERSION.SDK_INT>=26?new Notification.Builder(c,ch):new Notification.Builder(c);
-            nm.notify(7211,b.setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Car Scanner: Speed Limit").setContentText("Tap to install offline road speed-limit data").setContentIntent(pi).setAutoCancel(true).build());
+            String msg=RoadDatabase.currentFile(c).exists()?"Offline speed limits ready — tap to manage road data":"Tap to install offline road speed-limit data";
+            nm.notify(7211,b.setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Car Scanner: Speed Limit").setContentText(msg).setContentIntent(pi).setAutoCancel(true).build());
         }catch(Exception ignored){}
     }
     @Override public void onProviderEnabled(String p){}
