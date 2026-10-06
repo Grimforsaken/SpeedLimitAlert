@@ -133,7 +133,9 @@ jobs:
                               Value = double.NaN;
                               return;
                           }
-                          string s = File.ReadAllText(BridgeFile).Trim();
+                          string s;
+                          using (var sr = new StreamReader(BridgeFile))
+                              s = sr.ReadToEnd().Trim();
                           double value;
                           if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
                               Value = value;
