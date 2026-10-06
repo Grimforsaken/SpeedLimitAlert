@@ -1,4 +1,4 @@
-name: Inspect Real Car Scanner
+name: Build Car Scanner Patch Helper
 
 on:
   pull_request:
@@ -6,105 +6,24 @@ on:
   workflow_dispatch:
 
 jobs:
-  inspect:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-java@v4
         with:
-          dotnet-version: '8.0.x'
-
-      - name: Install inspection tools
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK 35
         run: |
-          dotnet tool install --global ilspycmd
-          python -m pip install --quiet lz4 pyelftools requests beautifulsoup4
-
-      - name: Download Car Scanner 2.1.3 arm64 APK
-        run: |
-          python - <<'PY'
-          import requests, hashlib
-          from bs4 import BeautifulSoup
-          base='https://www.apkmirror.com'
-          page=base+'/apk/car-scanner-llc/car-scanner-elm-obd2/car-scanner-elm-obd2-2-1-3-release/car-scanner-elm-obd2-2-1-3-2-android-apk-download/'
-          h={'user-agent':'APKUpdater-v0','authorization':'Basic YXBpLWFwa3VwZGF0ZXI6cm01cmNmcnVVakt5MDRzTXB5TVBKWFc4'}
-          s=requests.Session()
-          r=s.get(page,headers=h,timeout=30); print('page',r.status_code); r.raise_for_status()
-          soup=BeautifulSoup(r.text,'html.parser')
-          jump=soup.select_one('a.downloadButton')
-          if jump is None: raise SystemExit('downloadButton not found')
-          r=s.get(base+jump['href'],headers=h,timeout=30); print('jump',r.status_code); r.raise_for_status()
-          soup=BeautifulSoup(r.text,'html.parser')
-          link=soup.select_one('.card-with-tabs a[href]') or soup.select_one('a[rel=nofollow]')
-          if link is None: raise SystemExit('direct link not found')
-          final=link['href']
-          if final.startswith('/'): final=base+final
-          with s.get(final,headers=h,stream=True,timeout=180) as q:
-            print('download',q.status_code,q.url); q.raise_for_status()
-            with open('carscanner.apk','wb') as f:
-              for chunk in q.iter_content(1024*1024):
-                if chunk: f.write(chunk)
-          data=open('carscanner.apk','rb').read()
-          print('size',len(data),'sha256',hashlib.sha256(data).hexdigest())
-          PY
-          ls -lh carscanner.apk
-
-      - name: Extract MAUI assembly store
-        run: |
-          mkdir -p inspect/apk inspect/assemblies
-          unzip -q carscanner.apk -d inspect/apk
-          cp inspect/apk/lib/arm64-v8a/libassemblies.arm64-v8a.blob.so inspect/libassemblies.so
-          cat > inspect/extract_store.py <<'PY'
-          import struct,sys,os,lz4.block
-          from elftools.elf.elffile import ELFFile
-          so,out=sys.argv[1],sys.argv[2]
-          os.makedirs(out,exist_ok=True)
-          with open(so,'rb') as f:
-            elf=ELFFile(f); sec=elf.get_section_by_name('payload')
-            if sec is None: raise SystemExit('payload section missing')
-            d=sec.data()
-          if d[:4]!=b'XABA': raise SystemExit('bad XABA magic')
-          count=struct.unpack_from('<I',d,8)[0]
-          idxsz=struct.unpack_from('<I',d,16)[0]
-          pos=20+idxsz
-          desc=[]
-          for i in range(count):
-            vals=struct.unpack_from('<7I',d,pos); pos+=28; desc.append(vals)
-          names=[]
-          for i in range(count):
-            n=struct.unpack_from('<I',d,pos)[0]; pos+=4
-            names.append(d[pos:pos+n].decode('utf-8')); pos+=n
-          for name,vals in zip(names,desc):
-            off,size=vals[1],vals[2]
-            b=d[off:off+size]
-            if b[:4]==b'XALZ':
-              usize=struct.unpack_from('<I',b,8)[0]
-              b=lz4.block.decompress(b[12:],uncompressed_size=usize)
-            fn=name if name.endswith('.dll') else name+'.dll'
-            open(os.path.join(out,fn),'wb').write(b)
-          print('assemblies',count)
-          PY
-          python inspect/extract_store.py inspect/libassemblies.so inspect/assemblies
-          ls -lh inspect/assemblies/CarScannerMaui*.dll
-
-      - name: Decompile CarScannerMaui
-        run: |
-          mkdir -p inspect/decompiled
-          ilspycmd -l c inspect/assemblies/CarScannerMaui.dll > inspect/types.txt
-          grep -Ei 'GPS|Dashboard|Sensor|PID|Speed|Limit|Setting|Location' inspect/types.txt > inspect/relevant-types.txt || true
-          ilspycmd -p -o inspect/decompiled inspect/assemblies/CarScannerMaui.dll
-          grep -RilE 'PID_GPSSpeed|GPS_SPEED|DashboardItem_Act_SelectSensor|DashboardItemEditor_TapToSelectSensor|Speed limiter' inspect/decompiled > inspect/hits.txt || true
-          echo '=== hits ==='
-          cat inspect/hits.txt || true
-
-      - name: Upload inspection artifact
-        uses: actions/upload-artifact@v4
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
         with:
-          name: CarScanner-real-decompile
-          path: |
-            inspect/types.txt
-            inspect/relevant-types.txt
-            inspect/hits.txt
-            inspect/decompiled
-          compression-level: 9
+          gradle-version: '8.10.2'
+      - name: Build road-speed helper APK
+        run: gradle :patchhelper:assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: CarScanner-RoadSpeed-PatchHelper
+          path: patchhelper/build/outputs/apk/debug/patchhelper-debug.apk
