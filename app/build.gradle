@@ -5,11 +5,11 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.roadspeed.alert'
+        applicationId 'com.grimforsaken.carscanner'
         minSdk 23
         targetSdk 30
-        versionCode 11
-        versionName '1.1.0'
+        versionCode 1
+        versionName '1.0.0'
     }
 
     buildTypes {

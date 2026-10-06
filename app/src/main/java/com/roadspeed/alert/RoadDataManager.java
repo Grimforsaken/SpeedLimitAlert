@@ -21,13 +21,13 @@ public final class RoadDataManager {
         URL url=new URL("https://download.geofabrik.de/north-america/us/"+region+"-latest.osm.pbf");
         File dir=downloadsDir(c),part=new File(dir,region+"-latest.osm.pbf.part"),out=new File(dir,region+"-latest.osm.pbf");if(part.exists())part.delete();
         HttpURLConnection conn=(HttpURLConnection)url.openConnection();conn.setInstanceFollowRedirects(true);conn.setConnectTimeout(20000);conn.setReadTimeout(60000);
-        long last=Prefs.get(c).getLong(Prefs.KEY_LAST_MODIFIED,0);if(last>0)conn.setIfModifiedSince(last);conn.connect();
+        String lmKey=Prefs.KEY_LAST_MODIFIED+"_"+region;long last=Prefs.get(c).getLong(lmKey,0);if(last>0)conn.setIfModifiedSince(last);conn.connect();
         if(conn.getResponseCode()==HttpURLConnection.HTTP_NOT_MODIFIED&&RoadDatabase.currentFile(c).exists()){progress.update(100,"Road data is already current");conn.disconnect();return null;}
         if(conn.getResponseCode()<200||conn.getResponseCode()>=300)throw new IOException("Download failed: HTTP "+conn.getResponseCode());
         long total=conn.getContentLengthLong(),read=0;
         try(InputStream in=new BufferedInputStream(conn.getInputStream(),1024*1024);OutputStream os=new BufferedOutputStream(new FileOutputStream(part),1024*1024)){
             byte[]buf=new byte[1024*1024];int n;while((n=in.read(buf))!=-1){os.write(buf,0,n);read+=n;if(total>0)progress.update((int)Math.min(32,read*32/total),"Downloading road data");}
-        }finally{long lm=conn.getLastModified();if(lm>0)Prefs.get(c).edit().putLong(Prefs.KEY_LAST_MODIFIED,lm).apply();conn.disconnect();}
+        }finally{long lm=conn.getLastModified();if(lm>0)Prefs.get(c).edit().putLong(lmKey,lm).apply();conn.disconnect();}
         if(out.exists())out.delete();if(!part.renameTo(out))throw new IOException("Could not finish download");return out;
     }
     public static String sizeText(long b){if(b<1024)return b+" B";if(b<1024L*1024)return String.format(Locale.US,"%.1f KB",b/1024.0);if(b<1024L*1024*1024)return String.format(Locale.US,"%.1f MB",b/(1024.0*1024));return String.format(Locale.US,"%.2f GB",b/(1024.0*1024*1024));}

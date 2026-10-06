@@ -84,8 +84,8 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(15,15,15));
         scroll.addView(root);
 
-        root.addView(label("CAR SCANNER CUSTOM", 26, true));
-        root.addView(label("OBD-II scanner + offline speed-limit data", 14, false));
+        root.addView(label("CAR SCANNER", 26, true));
+        root.addView(label("OBD-II scanner with offline speed-limit data", 14, false));
 
         obdStatus = label("", 14, false);
         roadStatus = label("", 13, false);
@@ -140,7 +140,7 @@ public class MainActivity extends Activity {
         gpsFallback.setChecked(Prefs.get(this).getBoolean(Prefs.KEY_GPS_FALLBACK, true));
         root.addView(gpsFallback);
 
-        Button roadData = button("OFFLINE ROAD DATA & STORAGE");
+        Button roadData = button("SPEED LIMIT ROAD DATA");
         roadData.setOnClickListener(v -> startActivity(new Intent(this, StorageActivity.class)));
         root.addView(roadData);
 
