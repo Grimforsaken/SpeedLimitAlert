@@ -61,6 +61,13 @@ jobs:
         run: |
           ilspycmd -l c inspect/asm/CarScannerMaui.dll > inspect/types.txt
           grep -Ei 'GPS.*Altitude|Altitude.*GPS|GPS.*Speed|DashboardItem.*SelectSensor|PID_' inspect/types.txt | head -400 | tee inspect/relevant.txt
+          ilspycmd -t 'CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_GPSAltitude' inspect/asm/CarScannerMaui.dll > inspect/PID_GPSAltitude.cs
+          ilspycmd -t 'CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_GPSSpeed' inspect/asm/CarScannerMaui.dll > inspect/PID_GPSSpeed.cs
+          echo '===== PID_GPSAltitude ====='
+          cat inspect/PID_GPSAltitude.cs
+          echo '===== PID_GPSSpeed ====='
+          cat inspect/PID_GPSSpeed.cs
+
       - name: Upload inspection
         uses: actions/upload-artifact@v4
         with:
