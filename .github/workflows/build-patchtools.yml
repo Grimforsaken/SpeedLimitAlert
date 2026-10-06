@@ -20,6 +20,9 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0"
           mkdir -p out/androidtools/lib
           cp "$ANDROID_HOME/build-tools/35.0.0/zipalign" out/androidtools/
+          LIBCPP=$(find "$ANDROID_HOME" -name "libc++.so" -type f | head -1)
+          test -n "$LIBCPP"
+          cp "$LIBCPP" out/androidtools/
           cp "$ANDROID_HOME/build-tools/35.0.0/apksigner" out/androidtools/
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" out/androidtools/lib/
       - name: Build offline helper
