@@ -53,7 +53,7 @@ jobs:
           for i,(name,x) in enumerate(zip(names,desc)):
             b=d[x[1]:x[1]+x[2]]
             if b[:4]==b'XALZ': b=lz4.block.decompress(b[12:],uncompressed_size=struct.unpack_from('<I',b,8)[0])
-            open(os.path.join(out,name if name.endswith('.dll') else name+'.dll'),'wb').write(b)
+            path=os.path.join(out,name if name.endswith('.dll') else name+'.dll'); os.makedirs(os.path.dirname(path),exist_ok=True); open(path,'wb').write(b)
           print('count',n)
           PY
           python inspect/extract.py inspect/apk/lib/arm64-v8a/libassemblies.arm64-v8a.blob.so inspect/asm
