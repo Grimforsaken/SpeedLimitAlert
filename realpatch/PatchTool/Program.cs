@@ -95,8 +95,7 @@ static class Program
             .First(m => m != null
                 && m.Name == "Add"
                 && m.DeclaringType.FullName.StartsWith("System.Collections.Generic.List", StringComparison.Ordinal)
-                && m.Parameters.Count == 1
-                && m.Parameters[0].ParameterType.FullName == "CarScannerMaui.OBD2.PIDS.PID")!;
+                && m.Parameters.Count == 1)!;
 
         VariableDefinition? gpsVar = null;
         for (int i = 0; i < body.Instructions.Count; i++)
