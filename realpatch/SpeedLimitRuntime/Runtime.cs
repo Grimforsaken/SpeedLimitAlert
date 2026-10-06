@@ -226,14 +226,11 @@ public static class Runtime
                 return;
             }
 
-            object? def = filePickerType
-                .GetProperty("Default", BindingFlags.Static | BindingFlags.Public)
-                ?.GetValue(null);
-
-            MethodInfo? pick = filePickerType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            MethodInfo? pick = filePickerType
+                .GetMethods(BindingFlags.Static | BindingFlags.Public)
                 .FirstOrDefault(m => m.Name == "PickAsync");
 
-            if (def == null || pick == null)
+            if (pick == null)
             {
                 SetDescription(sender, "File picker is unavailable.");
                 return;
@@ -243,7 +240,7 @@ public static class Runtime
                 ? Array.Empty<object?>()
                 : new object?[] { null };
 
-            object? taskObj = pick.Invoke(def, pickArgs);
+            object? taskObj = pick.Invoke(null, pickArgs);
             if (taskObj is not Task task) return;
 
             await task.ConfigureAwait(true);
