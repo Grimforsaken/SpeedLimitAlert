@@ -19,14 +19,36 @@ jobs:
       - name: Install inspection tools
         run: |
           dotnet tool install --global ilspycmd
-          python -m pip install --quiet lz4 pyelftools
-          npm install -g @nirewen/apkcombo-downloader
+          python -m pip install --quiet lz4 pyelftools requests beautifulsoup4
 
       - name: Download Car Scanner 2.1.3 arm64 APK
         run: |
-          node "$(npm root -g)/@nirewen/apkcombo-downloader/dist/cli.js" download car-scanner-elm-obd2 com.ovz.carscanner --version 2.1.3 --arch arm64-v8a --dpi nodpi --type apk --outfile carscanner.apk --outdir .
+          python - <<'PY'
+          import requests, hashlib
+          from bs4 import BeautifulSoup
+          base='https://www.apkmirror.com'
+          page=base+'/apk/car-scanner-llc/car-scanner-elm-obd2/car-scanner-elm-obd2-2-1-3-release/car-scanner-elm-obd2-2-1-3-2-android-apk-download/'
+          h={'user-agent':'APKUpdater-v0','authorization':'Basic YXBpLWFwa3VwZGF0ZXI6cm01cmNmcnVVakt5MDRzTXB5TVBKWFc4'}
+          s=requests.Session()
+          r=s.get(page,headers=h,timeout=30); print('page',r.status_code); r.raise_for_status()
+          soup=BeautifulSoup(r.text,'html.parser')
+          jump=soup.select_one('a.downloadButton')
+          if jump is None: raise SystemExit('downloadButton not found')
+          r=s.get(base+jump['href'],headers=h,timeout=30); print('jump',r.status_code); r.raise_for_status()
+          soup=BeautifulSoup(r.text,'html.parser')
+          link=soup.select_one('.card-with-tabs a[href]') or soup.select_one('a[rel=nofollow]')
+          if link is None: raise SystemExit('direct link not found')
+          final=link['href']
+          if final.startswith('/'): final=base+final
+          with s.get(final,headers=h,stream=True,timeout=180) as q:
+            print('download',q.status_code,q.url); q.raise_for_status()
+            with open('carscanner.apk','wb') as f:
+              for chunk in q.iter_content(1024*1024):
+                if chunk: f.write(chunk)
+          data=open('carscanner.apk','rb').read()
+          print('size',len(data),'sha256',hashlib.sha256(data).hexdigest())
+          PY
           ls -lh carscanner.apk
-          sha256sum carscanner.apk
 
       - name: Extract MAUI assembly store
         run: |
