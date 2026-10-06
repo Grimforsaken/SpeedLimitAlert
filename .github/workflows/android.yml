@@ -1,4 +1,4 @@
-name: Build Local Patch Toolchain
+name: Inspect Real Car Scanner
 
 on:
   pull_request:
@@ -6,86 +6,63 @@ on:
   workflow_dispatch:
 
 jobs:
-  tools:
+  inspect:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
-
-      - name: Build Roslyn compiler wrapper
+          dotnet-version: '8.0.x'
+      - name: Install tools
         run: |
-          mkdir -p tools/CompileTool
-          cd tools/CompileTool
-          dotnet new console -f net10.0 --force
-          dotnet add package Microsoft.CodeAnalysis.CSharp --version 4.14.0
-          cat > Program.cs <<'CS'
-          using System;
-          using System.Collections.Generic;
-          using System.IO;
-          using System.Linq;
-          using Microsoft.CodeAnalysis;
-          using Microsoft.CodeAnalysis.CSharp;
-
-          if (args.Length < 4) {
-              Console.Error.WriteLine("usage: CompileTool <source.cs> <out.dll> <assemblyName> <refsDir> [extraRef.dll ...]");
-              return 2;
-          }
-          var source = Path.GetFullPath(args[0]);
-          var output = Path.GetFullPath(args[1]);
-          var asmName = args[2];
-          var refsDir = Path.GetFullPath(args[3]);
-          var refs = new List<MetadataReference>();
-          foreach (var f in Directory.EnumerateFiles(refsDir, "*.dll", SearchOption.AllDirectories)) {
-              try { refs.Add(MetadataReference.CreateFromFile(f)); } catch {}
-          }
-          for (int i=4;i<args.Length;i++) {
-              var f=Path.GetFullPath(args[i]);
-              if (File.Exists(f)) refs.Add(MetadataReference.CreateFromFile(f));
-          }
-          var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(source),
-              new CSharpParseOptions(LanguageVersion.Latest));
-          var comp = CSharpCompilation.Create(
-              asmName,
-              new[]{syntax},
-              refs,
-              new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
-                  optimizationLevel: OptimizationLevel.Release,
-                  nullableContextOptions: NullableContextOptions.Disable,
-                  allowUnsafe: true));
-          using var fs = File.Create(output);
-          var emit = comp.Emit(fs);
-          foreach(var d in emit.Diagnostics.Where(d=>d.Severity>=DiagnosticSeverity.Warning))
-              Console.Error.WriteLine(d.ToString());
-          if(!emit.Success) { try{fs.Close();File.Delete(output);}catch{} return 1; }
-          Console.WriteLine(output);
-          return 0;
-          CS
-          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/compile
-
-      - name: Build Cecil patcher skeleton
+          dotnet tool install --global ilspycmd
+          python -m pip install --quiet requests lz4 pyelftools
+      - name: Download exact recovered Car Scanner 2.1.3 APK
         run: |
-          mkdir -p tools/CecilPatch
-          cd tools/CecilPatch
-          dotnet new console -f net10.0 --force
-          dotnet add package Mono.Cecil --version 0.11.6
-          cat > Program.cs <<'CS'
-          using System;
-          using Mono.Cecil;
-          if (args.Length < 1) return 2;
-          using var m = ModuleDefinition.ReadModule(args[0]);
-          Console.WriteLine(m.Assembly.Name.FullName);
-          foreach (var t in m.Types)
-            if (t.FullName.Contains("CarData") || t.FullName.Contains("PID_GPSSpeed"))
-              Console.WriteLine(t.FullName);
-          return 0;
-          CS
-          dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/cecil
-
-      - name: Upload toolchain
+          python - <<'PY'
+          import requests,hashlib
+          url='https://d.apkpure.net/b/APK/com.ovz.carscanner?versionCode=42001003'
+          with requests.get(url,headers={'User-Agent':'Mozilla/5.0'},stream=True,allow_redirects=True,timeout=180) as r:
+            r.raise_for_status()
+            with open('carscanner.apk','wb') as f:
+              for ch in r.iter_content(1024*1024):
+                if ch:f.write(ch)
+          b=open('carscanner.apk','rb').read()
+          sha=hashlib.sha256(b).hexdigest()
+          print(len(b),sha)
+          assert len(b)==63465574
+          assert sha=='eb0e03ee683566db4a3aede66cd3b9c3989ee531e1b5f8b351a4b4a2ff427945'
+          PY
+      - name: Extract CarScannerMaui assembly
+        run: |
+          mkdir -p inspect/apk inspect/asm
+          unzip -q carscanner.apk -d inspect/apk
+          cat > inspect/extract.py <<'PY'
+          import struct,sys,os,lz4.block
+          from elftools.elf.elffile import ELFFile
+          so=sys.argv[1];out=sys.argv[2];os.makedirs(out,exist_ok=True)
+          with open(so,'rb') as f:
+            s=ELFFile(f).get_section_by_name('payload');d=s.data()
+          assert d[:4]==b'XABA'
+          n=struct.unpack_from('<I',d,8)[0];isz=struct.unpack_from('<I',d,16)[0];p=20+isz;desc=[]
+          for _ in range(n): desc.append(struct.unpack_from('<7I',d,p));p+=28
+          names=[]
+          for _ in range(n):
+            z=struct.unpack_from('<I',d,p)[0];p+=4;names.append(d[p:p+z].decode());p+=z
+          for i,(name,x) in enumerate(zip(names,desc)):
+            b=d[x[1]:x[1]+x[2]]
+            if b[:4]==b'XALZ': b=lz4.block.decompress(b[12:],uncompressed_size=struct.unpack_from('<I',b,8)[0])
+            open(os.path.join(out,name if name.endswith('.dll') else name+'.dll'),'wb').write(b)
+          print('count',n)
+          PY
+          python inspect/extract.py inspect/apk/lib/arm64-v8a/libassemblies.arm64-v8a.blob.so inspect/asm
+      - name: Inspect target types
+        run: |
+          ilspycmd -l c inspect/asm/CarScannerMaui.dll > inspect/types.txt
+          grep -Ei 'GPS.*Altitude|Altitude.*GPS|GPS.*Speed|DashboardItem.*SelectSensor|PID_' inspect/types.txt | head -400 | tee inspect/relevant.txt
+      - name: Upload inspection
         uses: actions/upload-artifact@v4
         with:
-          name: carscanner-local-toolchain
-          path: out
-          compression-level: 0
+          name: real-car-scanner-types
+          path: inspect/*.txt
