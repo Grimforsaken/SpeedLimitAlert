@@ -131,9 +131,17 @@ static class Program
 
         Instruction insertBefore;
         if (body.ExceptionHandlers.Count > 0 && body.ExceptionHandlers[0].TryEnd != null)
-            insertBefore = body.ExceptionHandlers[0].TryEnd;
+        {
+            Instruction tryEnd = body.ExceptionHandlers[0].TryEnd;
+            int boundary = body.Instructions.IndexOf(tryEnd);
+            insertBefore = body.Instructions
+                .Take(boundary)
+                .Last(i => i.OpCode == OpCodes.Leave || i.OpCode == OpCodes.Leave_S);
+        }
         else
+        {
             insertBefore = body.Instructions.Last(i => i.OpCode == OpCodes.Ret);
+        }
 
         var seq = new List<Instruction> {
             il.Create(OpCodes.Ldarg_0),
