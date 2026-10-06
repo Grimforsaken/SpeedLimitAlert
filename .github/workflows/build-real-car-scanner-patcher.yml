@@ -1,0 +1,31 @@
+name: Build Real Car Scanner Patcher
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'realpatch/**'
+      - '.github/workflows/build-real-car-scanner-patcher.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Build runtime and bridge
+        run: |
+          dotnet build realpatch/SpeedLimitRuntime/SpeedLimitRuntime.csproj -c Release
+          dotnet build realpatch/BridgeTemplate/BridgeTemplate.csproj -c Release
+      - name: Publish patch tool
+        run: |
+          dotnet publish realpatch/PatchTool/PatchTool.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -o out/tool
+          cp realpatch/SpeedLimitRuntime/bin/Release/net9.0/SpeedLimitRuntime.dll out/tool/
+          cp realpatch/BridgeTemplate/bin/Release/net9.0/BridgeTemplate.dll out/tool/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-car-scanner-patcher-linux
+          path: out/tool/
