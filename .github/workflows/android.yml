@@ -24,7 +24,7 @@ jobs:
 
       - name: Download Car Scanner 2.1.3 arm64 APK
         run: |
-          apkmd download car-scanner-elm-obd2 com.ovz.carscanner --version 2.1.3 --arch arm64-v8a --dpi nodpi --type apk --outfile carscanner.apk --outdir .
+          node "$(npm root -g)/@nirewen/apkcombo-downloader/dist/cli.js" download car-scanner-elm-obd2 com.ovz.carscanner --version 2.1.3 --arch arm64-v8a --dpi nodpi --type apk --outfile carscanner.apk --outdir .
           ls -lh carscanner.apk
           sha256sum carscanner.apk
 
