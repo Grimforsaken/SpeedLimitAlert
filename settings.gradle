@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = 'SpeedLimitAlert'
-include ':app'
+include ':app', ':patchhelper'

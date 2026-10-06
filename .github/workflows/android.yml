@@ -1,36 +1,425 @@
-name: Build Android APK
+name: Build Patched Car Scanner APK
 
 on:
-  push:
-    branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Cache stable debug signing key
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache stable mod signing key
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
           key: speedlimitalert-debug-keystore-v1
-      - name: Install Android SDK 35
+
+      - name: Install Android and patch tools
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+          python -m pip install --quiet requests lz4 pyelftools
+          dotnet tool install --global ilspycmd
+          curl --retry 3 -fsSL -o maui_packer.py https://raw.githubusercontent.com/svedm/maui-packer/master/maui_packer.py
+          python - <<'PY'
+          import requests
+          j=requests.get('https://api.github.com/repos/iBotPeaches/Apktool/releases/latest',headers={'User-Agent':'carscanner-patch'},timeout=30).json()
+          jars=[a for a in j.get('assets',[]) if a.get('name','').startswith('apktool_') and a.get('name','').endswith('.jar')]
+          if not jars: raise SystemExit('apktool jar asset not found')
+          a=jars[0]
+          with requests.get(a['browser_download_url'],stream=True,timeout=120) as r:
+              r.raise_for_status()
+              with open('apktool.jar','wb') as f:
+                  for c in r.iter_content(1024*1024):
+                      if c:f.write(c)
+          print('apktool',a['name'])
+          PY
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Download exact recovered Car Scanner 2.1.3
+        run: |
+          python - <<'PY'
+          import requests,hashlib
+          url='https://d.apkpure.net/b/APK/com.ovz.carscanner?versionCode=42001003'
+          with requests.get(url,headers={'User-Agent':'Mozilla/5.0'},stream=True,allow_redirects=True,timeout=180) as r:
+              r.raise_for_status()
+              with open('carscanner.apk','wb') as f:
+                  for c in r.iter_content(1024*1024):
+                      if c:f.write(c)
+          b=open('carscanner.apk','rb').read()
+          sha=hashlib.sha256(b).hexdigest()
+          print('size',len(b),'sha256',sha)
+          assert len(b)==63465574
+          assert sha=='eb0e03ee683566db4a3aede66cd3b9c3989ee531e1b5f8b351a4b4a2ff427945'
+          PY
+
+      - name: Extract MAUI assembly store
+        run: |
+          mkdir -p work/apk work/asm
+          unzip -q carscanner.apk -d work/apk
+          cp work/apk/lib/arm64-v8a/libassemblies.arm64-v8a.blob.so work/original-assemblies.so
+          python maui_packer.py extract work/original-assemblies.so work/asm
+          test -s work/asm/CarScannerMaui.dll
+          ls -lh work/asm/CarScannerMaui.dll
+
+      - name: Build managed Speed Limit PID helper
+        run: |
+          cat > work/SpeedLimitPatch.cs <<'CS'
+          using System;
+          using System.Globalization;
+          using System.IO;
+          using System.Threading;
+          using CarScannerMaui.OBD2.PIDS;
+          using CarScannerMaui.OBD2.PIDS.CalculatedPIDs;
+
+          namespace CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common
+          {
+              public sealed class PID_SpeedLimit : SensorPID
+              {
+                  private const string BridgeFile = "/data/user/0/com.ovz.carscanner/files/GPS_ALTITUDE";
+                  private Timer pollTimer;
+
+                  public PID_SpeedLimit()
+                      : base("Speed Limit", "SPEED_LIMIT", UnitsHelper.Units.mph)
+                  {
+                      Minimum = 0.0;
+                      Maximum = 100.0;
+                      Command = "SPEED_LIMIT";
+                      IsAvailable = true;
+                  }
+
+                  public override void Initialize()
+                  {
+                      IsAvailable = true;
+                  }
+
+                  public override void Start()
+                  {
+                      if (pollTimer == null)
+                          pollTimer = new Timer(Poll, null, 0, 500);
+                  }
+
+                  public override void Stop()
+                  {
+                      Timer t = pollTimer;
+                      pollTimer = null;
+                      if (t != null) t.Dispose();
+                  }
+
+                  private void Poll(object state)
+                  {
+                      try
+                      {
+                          if (!File.Exists(BridgeFile))
+                          {
+                              Value = double.NaN;
+                              return;
+                          }
+                          string s;
+                          using (var sr = new StreamReader(BridgeFile))
+                              s = sr.ReadToEnd().Trim();
+                          double value;
+                          if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                              Value = value;
+                          else
+                              Value = double.NaN;
+                      }
+                      catch
+                      {
+                          Value = double.NaN;
+                      }
+                  }
+              }
+          }
+          CS
+
+          mkdir -p work/compiletool
+          cd work/compiletool
+          dotnet new console -f net8.0 --force >/dev/null
+          dotnet add package Microsoft.CodeAnalysis.CSharp --version 4.14.0 >/dev/null
+          cat > Program.cs <<'CS'
+          using System;
+          using System.Collections.Generic;
+          using System.IO;
+          using System.Linq;
+          using Microsoft.CodeAnalysis;
+          using Microsoft.CodeAnalysis.CSharp;
+
+          if (args.Length != 4) return 2;
+          var refs = new List<MetadataReference>();
+          foreach (var p in Directory.EnumerateFiles(Path.GetFullPath(args[3]), "*.dll", SearchOption.AllDirectories))
+          {
+              try { refs.Add(MetadataReference.CreateFromFile(p)); } catch {}
+          }
+          var tree=CSharpSyntaxTree.ParseText(File.ReadAllText(Path.GetFullPath(args[0])),
+              new CSharpParseOptions(LanguageVersion.Latest));
+          var comp=CSharpCompilation.Create(args[2],new[]{tree},refs,
+              new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
+                  optimizationLevel:OptimizationLevel.Release,
+                  nullableContextOptions:NullableContextOptions.Disable));
+          using var fs=File.Create(Path.GetFullPath(args[1]));
+          var result=comp.Emit(fs);
+          foreach(var d in result.Diagnostics.Where(x=>x.Severity>=DiagnosticSeverity.Warning))
+              Console.Error.WriteLine(d.ToString());
+          return result.Success?0:1;
+          CS
+          dotnet run -c Release -- ../SpeedLimitPatch.cs ../SpeedLimitPatch.dll SpeedLimitPatch ../asm
+          cd ../..
+          test -s work/SpeedLimitPatch.dll
+
+      - name: Build Cecil patcher and inject PID
+        run: |
+          mkdir -p work/patcher
+          cd work/patcher
+          dotnet new console -f net8.0 --force >/dev/null
+          dotnet add package Mono.Cecil --version 0.11.6 >/dev/null
+          cat > Program.cs <<'CS'
+          using System;
+          using System.Collections.Generic;
+          using System.IO;
+          using System.Linq;
+          using Mono.Cecil;
+          using Mono.Cecil.Cil;
+
+          if (args.Length < 3) return 2;
+          string targetPath=Path.GetFullPath(args[0]), helperPath=Path.GetFullPath(args[1]), outputPath=Path.GetFullPath(args[2]);
+          var resolver=new DefaultAssemblyResolver();
+          resolver.AddSearchDirectory(Path.GetDirectoryName(targetPath)!);
+          resolver.AddSearchDirectory(Path.GetDirectoryName(helperPath)!);
+          var rp=new ReaderParameters{AssemblyResolver=resolver,ReadSymbols=false,InMemory=true};
+          using var target=ModuleDefinition.ReadModule(targetPath,rp);
+          using var helper=ModuleDefinition.ReadModule(helperPath,rp);
+
+          const string fullName="CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_SpeedLimit";
+          if(target.Types.Any(t=>t.FullName==fullName)) throw new Exception("PID_SpeedLimit already exists");
+          var src=helper.Types.First(t=>t.FullName==fullName);
+          var dst=new TypeDefinition(src.Namespace,src.Name,src.Attributes,target.ImportReference(src.BaseType));
+          target.Types.Add(dst);
+
+          var fmap=new Dictionary<FieldDefinition,FieldDefinition>();
+          foreach(var sf in src.Fields){
+              var df=new FieldDefinition(sf.Name,sf.Attributes,target.ImportReference(sf.FieldType));
+              if(sf.HasConstant)df.Constant=sf.Constant;
+              dst.Fields.Add(df);fmap[sf]=df;
+          }
+          var mmap=new Dictionary<MethodDefinition,MethodDefinition>();
+          foreach(var sm in src.Methods){
+              var dm=new MethodDefinition(sm.Name,sm.Attributes,target.ImportReference(sm.ReturnType)){ImplAttributes=sm.ImplAttributes};
+              foreach(var sp in sm.Parameters)dm.Parameters.Add(new ParameterDefinition(sp.Name,sp.Attributes,target.ImportReference(sp.ParameterType)));
+              dst.Methods.Add(dm);mmap[sm]=dm;
+          }
+          MethodReference IM(MethodReference mr){
+              if(mr.DeclaringType.FullName==src.FullName){
+                  var rr=mr.Resolve();
+                  if(rr!=null&&mmap.TryGetValue(rr,out var mapped))return mapped;
+                  var c=src.Methods.Where(x=>x.Name==mr.Name&&x.Parameters.Count==mr.Parameters.Count).ToList();
+                  if(c.Count==1)return mmap[c[0]];
+              }
+              return target.ImportReference(mr);
+          }
+          FieldReference IF(FieldReference fr){
+              if(fr.DeclaringType.FullName==src.FullName){
+                  var rr=fr.Resolve();
+                  if(rr!=null&&fmap.TryGetValue(rr,out var mapped))return mapped;
+                  var c=src.Fields.FirstOrDefault(x=>x.Name==fr.Name);
+                  if(c!=null)return fmap[c];
+              }
+              return target.ImportReference(fr);
+          }
+          TypeReference IT(TypeReference tr)=>tr.FullName==src.FullName?dst:target.ImportReference(tr);
+
+          foreach(var sm in src.Methods){
+              var dm=mmap[sm];if(!sm.HasBody)continue;
+              dm.Body.InitLocals=sm.Body.InitLocals;dm.Body.MaxStackSize=Math.Max(sm.Body.MaxStackSize,8);
+              var vmap=new Dictionary<VariableDefinition,VariableDefinition>();
+              foreach(var sv in sm.Body.Variables){var dv=new VariableDefinition(IT(sv.VariableType));dm.Body.Variables.Add(dv);vmap[sv]=dv;}
+              var imap=new Dictionary<Instruction,Instruction>();
+              foreach(var si in sm.Body.Instructions){
+                  object? op=si.Operand;Instruction di;
+                  if(op==null)di=Instruction.Create(si.OpCode);
+                  else if(op is string ss)di=Instruction.Create(si.OpCode,ss);
+                  else if(op is sbyte sb)di=Instruction.Create(si.OpCode,sb);
+                  else if(op is byte bb)di=Instruction.Create(si.OpCode,(sbyte)bb);
+                  else if(op is int ii)di=Instruction.Create(si.OpCode,ii);
+                  else if(op is long ll)di=Instruction.Create(si.OpCode,ll);
+                  else if(op is float ff)di=Instruction.Create(si.OpCode,ff);
+                  else if(op is double dd)di=Instruction.Create(si.OpCode,dd);
+                  else if(op is MethodReference mr)di=Instruction.Create(si.OpCode,IM(mr));
+                  else if(op is FieldReference fr)di=Instruction.Create(si.OpCode,IF(fr));
+                  else if(op is TypeReference tr)di=Instruction.Create(si.OpCode,IT(tr));
+                  else if(op is VariableDefinition vv)di=Instruction.Create(si.OpCode,vmap[vv]);
+                  else if(op is ParameterDefinition pp)di=Instruction.Create(si.OpCode,dm.Parameters[pp.Index]);
+                  else if(op is Instruction)di=Instruction.Create(si.OpCode,Instruction.Create(OpCodes.Nop));
+                  else if(op is Instruction[])di=Instruction.Create(si.OpCode,new[]{Instruction.Create(OpCodes.Nop)});
+                  else if(op is CallSite cs){
+                      var ncs=new CallSite(target.ImportReference(cs.ReturnType)){CallingConvention=cs.CallingConvention,HasThis=cs.HasThis,ExplicitThis=cs.ExplicitThis};
+                      foreach(var p in cs.Parameters)ncs.Parameters.Add(new ParameterDefinition(target.ImportReference(p.ParameterType)));
+                      di=Instruction.Create(si.OpCode,ncs);
+                  }
+                  else throw new NotSupportedException("Unsupported operand "+op.GetType());
+                  dm.Body.Instructions.Add(di);imap[si]=di;
+              }
+              for(int i=0;i<sm.Body.Instructions.Count;i++){
+                  var so=sm.Body.Instructions[i].Operand;var di=dm.Body.Instructions[i];
+                  if(so is Instruction one)di.Operand=imap[one];
+                  else if(so is Instruction[] many)di.Operand=many.Select(x=>imap[x]).ToArray();
+              }
+              foreach(var e in sm.Body.ExceptionHandlers){
+                  dm.Body.ExceptionHandlers.Add(new ExceptionHandler(e.HandlerType){
+                      CatchType=e.CatchType==null?null:IT(e.CatchType),
+                      TryStart=e.TryStart==null?null:imap[e.TryStart],
+                      TryEnd=e.TryEnd==null?null:imap[e.TryEnd],
+                      HandlerStart=e.HandlerStart==null?null:imap[e.HandlerStart],
+                      HandlerEnd=e.HandlerEnd==null?null:imap[e.HandlerEnd],
+                      FilterStart=e.FilterStart==null?null:imap[e.FilterStart]});
+              }
+          }
+
+          var carData=target.Types.First(t=>t.FullName=="CarScannerMaui.OBD2.CarData");
+          var create=carData.Methods.First(m=>m.Name=="CreateCalculatedPIDs"&&!m.HasParameters);
+          var ins=create.Body.Instructions;
+          int gpsNew=-1;
+          for(int i=0;i<ins.Count;i++)
+              if(ins[i].OpCode==OpCodes.Newobj&&ins[i].Operand is MethodReference mr&&mr.DeclaringType.FullName=="CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_GPSSpeed"){gpsNew=i;break;}
+          if(gpsNew<0)throw new Exception("GPS speed constructor not found");
+
+          int addAt=-1;MethodReference? getList=null,addPid=null,setId=null;
+          for(int i=gpsNew;i<Math.Min(ins.Count,gpsNew+30);i++){
+              if(ins[i].Operand is MethodReference mr){
+                  if(mr.Name=="get_LiveDataPIDs")getList=mr;
+                  else if(mr.Name=="set_Id")setId=mr;
+                  else if(mr.Name=="Add"&&mr.DeclaringType.FullName.StartsWith("System.Collections.Generic.List")){addPid=mr;addAt=i;break;}
+              }
+          }
+          if(addAt<0||getList==null||addPid==null||setId==null)throw new Exception("PID list insertion references not found");
+          var ctor=mmap[src.Methods.First(m=>m.IsConstructor&&!m.IsStatic&&m.Parameters.Count==0)];
+          var injected=new[]{
+              Instruction.Create(OpCodes.Ldarg_0),
+              Instruction.Create(OpCodes.Call,getList),
+              Instruction.Create(OpCodes.Newobj,ctor),
+              Instruction.Create(OpCodes.Dup),
+              Instruction.Create(OpCodes.Ldc_I4,917),
+              Instruction.Create(OpCodes.Callvirt,setId),
+              Instruction.Create(OpCodes.Callvirt,addPid)};
+          for(int k=0;k<injected.Length;k++)ins.Insert(addAt+1+k,injected[k]);
+          create.Body.MaxStackSize=Math.Max(create.Body.MaxStackSize,5);
+          target.Write(outputPath,new WriterParameters{WriteSymbols=false});
+          Console.WriteLine("Added PID_SpeedLimit with Id 917 to CarData.CreateCalculatedPIDs");
+          return 0;
+          CS
+          dotnet run -c Release -- ../asm/CarScannerMaui.dll ../SpeedLimitPatch.dll ../CarScannerMaui.patched.dll
+          cd ../..
+          mv work/CarScannerMaui.patched.dll work/asm/CarScannerMaui.dll
+
+      - name: Repack and verify MAUI store
+        run: |
+          python maui_packer.py repack work/original-assemblies.so work/asm work/libassemblies.patched.so
+          mkdir -p work/verifyasm
+          python maui_packer.py extract work/libassemblies.patched.so work/verifyasm
+          ilspycmd -l c work/verifyasm/CarScannerMaui.dll | grep 'PID_SpeedLimit'
+          ilspycmd -t 'CarScannerMaui.OBD2.PIDS.CalculatedPIDs.Common.PID_SpeedLimit' work/verifyasm/CarScannerMaui.dll | tee work/PID_SpeedLimit.txt
+          grep -q 'Speed Limit' work/PID_SpeedLimit.txt
+          grep -q 'SPEED_LIMIT' work/PID_SpeedLimit.txt
+
+      - name: Build Android offline-road helper
+        run: |
+          gradle :patchhelper:assembleDebug --stacktrace
+          rm -rf work/helperdex
+          mkdir -p work/helperdex
+          cd work/helperdex
+          unzip -j ../../patchhelper/build/outputs/apk/debug/patchhelper-debug.apk 'classes*.dex'
+          cd ../..
+          ls -lh work/helperdex/classes*.dex
+          n=4
+          for d in $(find work/helperdex -maxdepth 1 -name 'classes*.dex' | sort -V); do
+            cp "$d" "work/classes$n.dex"
+            n=$((n+1))
+          done
+          test -n "$(for d in work/classes{4,5,6,7,8,9}.dex; do [ -f "$d" ] && strings "$d" | grep -m1 'Lcom/ovz/carscanner/RoadSpeedRuntime;' || true; done)"
+          echo "Helper runtime classes:"
+          for d in work/classes{4,5,6,7,8,9}.dex; do
+            [ -f "$d" ] || continue
+            echo "--- $d ---"
+            strings "$d" | grep -E 'Lcom/ovz/carscanner/(RoadSpeedRuntime|RoadDatabase|RoadDataImporter|SpeedLimitOfflineRoadDataSettingsActivityPatch|roadspeedinitprovider);' || true
+          done
+
+      - name: Merge patch into real Car Scanner APK
+        run: |
+          java -jar apktool.jar d -f -s carscanner.apk -o work/decoded
+          for d in work/classes{4,5,6,7,8,9}.dex; do [ -f "$d" ] && cp "$d" work/decoded/; done
+          cp work/libassemblies.patched.so work/decoded/lib/arm64-v8a/libassemblies.arm64-v8a.blob.so
+          rm -f work/decoded/lib/arm64-v8a/libaot-CarScannerMaui.dll.so
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          p='work/decoded/AndroidManifest.xml'
+          ns='http://schemas.android.com/apk/res/android'
+          A='{'+ns+'}'
+          ET.register_namespace('android',ns)
+          tree=ET.parse(p);root=tree.getroot()
+          root.set(A+'versionCode','42001004')
+          root.set(A+'versionName','2.1.3-speedlimit1')
+          app=root.find('application')
+          if app is None: raise SystemExit('application element missing')
+          activity=ET.Element('activity',{
+              A+'name':'com.ovz.carscanner.SpeedLimitOfflineRoadDataSettingsActivityPatch',
+              A+'exported':'false',
+              A+'theme':'@android:style/Theme.Material.NoActionBar'})
+          provider=ET.Element('provider',{
+              A+'name':'com.ovz.carscanner.roadspeedinitprovider',
+              A+'authorities':'com.ovz.carscanner.roadspeedinit',
+              A+'exported':'false',
+              A+'initOrder':'199'})
+          app.append(activity);app.append(provider)
+          tree.write(p,encoding='utf-8',xml_declaration=True)
+          PY
+          java -jar apktool.jar b work/decoded -o work/CarScanner-SpeedLimit-unsigned.apk
+
+      - name: Sign and validate APK
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -dname "CN=Car Scanner Custom,O=Personal Build,C=US" -keyalg RSA -keysize 2048 -validity 10000
+          fi
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          "$BT/zipalign" -f -p 4 work/CarScanner-SpeedLimit-unsigned.apk work/CarScanner-SpeedLimit-aligned.apk
+          "$BT/apksigner" sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out work/CarScanner-SpeedLimit-2.1.3.apk work/CarScanner-SpeedLimit-aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs work/CarScanner-SpeedLimit-2.1.3.apk
+          unzip -t work/CarScanner-SpeedLimit-2.1.3.apk >/dev/null
+          unzip -l work/CarScanner-SpeedLimit-2.1.3.apk | grep -E 'classes[4-9]\\.dex|libassemblies.arm64-v8a.blob.so'
+          rm -rf work/finaldex && mkdir work/finaldex
+          cd work/finaldex
+          unzip -j ../CarScanner-SpeedLimit-2.1.3.apk 'classes*.dex' >/dev/null
+          cd ../..
+          test -n "$(for d in work/finaldex/classes*.dex; do strings "$d" | grep -m1 'Lcom/ovz/carscanner/RoadSpeedRuntime;' || true; done)"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest application-id work/CarScanner-SpeedLimit-2.1.3.apk
+          "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest version-code work/CarScanner-SpeedLimit-2.1.3.apk
+          "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest print work/CarScanner-SpeedLimit-2.1.3.apk | grep -E 'SpeedLimitOfflineRoadDataSettingsActivityPatch|roadspeedinitprovider'
+          sha256sum work/CarScanner-SpeedLimit-2.1.3.apk
+
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: always()
         with:
-          name: CarDashboard-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: CarScanner-SpeedLimit-2.1.3
+          path: |
+            work/CarScanner-SpeedLimit-2.1.3.apk
+            work/PID_SpeedLimit.txt
+          if-no-files-found: warn
+          compression-level: 0
