@@ -24,22 +24,25 @@ jobs:
           using System.IO;
           using ICSharpCode.Decompiler;
           using ICSharpCode.Decompiler.CSharp;
+          using ICSharpCode.Decompiler.TypeSystem;
 
-          if (args.Length < 1) {
-              Console.Error.WriteLine("usage: decompile <assembly> [output.cs]");
+          if (args.Length < 2) {
+              Console.Error.WriteLine("usage: DecompilerTool <assembly> <output.cs> [full.type.name]");
               return 2;
           }
           var input = Path.GetFullPath(args[0]);
-          var output = args.Length > 1 ? Path.GetFullPath(args[1]) : input + ".decompiled.cs";
-          var settings = new DecompilerSettings {
-              ThrowOnAssemblyResolveErrors = false
-          };
+          var output = Path.GetFullPath(args[1]);
+          var settings = new DecompilerSettings { ThrowOnAssemblyResolveErrors = false };
           var d = new CSharpDecompiler(input, settings);
-          File.WriteAllText(output, d.DecompileWholeModuleAsString());
+          string text = args.Length >= 3
+              ? d.DecompileTypeAsString(new FullTypeName(args[2]))
+              : d.DecompileWholeModuleAsString();
+          File.WriteAllText(output, text);
           Console.WriteLine(output);
           return 0;
           CS
           dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/decompiler
+
       - name: Build self-contained dnlib inspector
         run: |
           mkdir -p tools/DnInspect
@@ -51,26 +54,27 @@ jobs:
           using System.Linq;
           using dnlib.DotNet;
           using dnlib.DotNet.Emit;
+
           if (args.Length < 1) return 2;
+          var filter = args.Length > 1 ? args[1] : "";
           var m = ModuleDefMD.Load(args[0]);
           foreach (var t in m.GetTypes()) {
-            if (t.FullName.Contains("GPS", StringComparison.OrdinalIgnoreCase) ||
-                t.FullName.Contains("Dashboard", StringComparison.OrdinalIgnoreCase) ||
-                t.FullName.Contains("PID", StringComparison.OrdinalIgnoreCase) ||
-                t.FullName.Contains("Sensor", StringComparison.OrdinalIgnoreCase)) {
-              Console.WriteLine("TYPE " + t.FullName);
-              foreach (var md in t.Methods)
-                Console.WriteLine("  M " + md.FullName);
-              foreach (var f in t.Fields)
-                Console.WriteLine("  F " + f.FullName);
+            if (!string.IsNullOrEmpty(filter) && !t.FullName.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            Console.WriteLine("TYPE " + t.FullName);
+            foreach (var md in t.Methods) {
+              Console.WriteLine("METHOD " + md.FullName);
+              if (md.HasBody) foreach (var ins in md.Body.Instructions)
+                Console.WriteLine($"  {ins.Offset:X4}: {ins.OpCode} {ins.Operand}");
             }
+            foreach (var f in t.Fields) Console.WriteLine("FIELD " + f.FullName);
           }
           return 0;
           CS
           dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false -o ../../out/dninspect
+
       - name: Upload tools
         uses: actions/upload-artifact@v4
         with:
-          name: maui-patch-tools
+          name: maui-patch-tools-v2
           path: out
           compression-level: 0
